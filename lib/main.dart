@@ -6,7 +6,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:gal/gal.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path_provider/path_provider.dart';
@@ -16,6 +15,8 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wifi_scan/wifi_scan.dart';
+
+const MethodChannel gallery = MethodChannel('qr_studio/gallery');
 
 /* ---------- saved Wi-Fi networks ---------- */
 
@@ -218,7 +219,7 @@ class _CreatePageState extends State<CreatePage> {
         if (mounted) toast(context, 'Couldn’t read scan results.');
         return;
       }
-      final res = await WiFiScan.instance.getScannedResults();
+      final res = [...await WiFiScan.instance.getScannedResults()];
       res.sort((a, b) => b.level.compareTo(a.level));
       final seen = <String>{};
       final list = <Ap>[];
@@ -254,11 +255,13 @@ class _CreatePageState extends State<CreatePage> {
     final png = await _png();
     if (png == null) return;
     try {
-      if (!await Gal.hasAccess()) await Gal.requestAccess();
-      await Gal.putImageBytes(png, album: 'QR Studio');
-      if (mounted) toast(context, 'Saved to your gallery.');
-    } catch (e) {
-      if (mounted) toast(context, 'Couldn’t save the image. Check storage permission.');
+      await gallery.invokeMethod('saveImage', {
+        'bytes': png,
+        'name': 'qr_${DateTime.now().millisecondsSinceEpoch}.png',
+      });
+      if (mounted) toast(context, 'Saved to Pictures/QR Studio.');
+    } on PlatformException catch (e) {
+      if (mounted) toast(context, e.message ?? 'Couldn’t save the image.');
     }
   }
 
