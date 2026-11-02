@@ -1,4 +1,3 @@
-
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -17,7 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wifi_scan/wifi_scan.dart';
 
-const MethodChannel gallery = MethodChannel('qr_studio/gallery');
+const MethodChannel gallery = MethodChannel('qr_master/gallery');
 
 /* ---------- saved Wi-Fi networks ---------- */
 
@@ -94,7 +93,7 @@ class QrApp extends StatelessWidget {
   Widget build(BuildContext context) {
     const seed = Color(0xFF1F4BFF);
     return MaterialApp(
-      title: 'QR Studio',
+      title: 'QR Master',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: seed)),
       darkTheme: ThemeData(
@@ -117,7 +116,7 @@ class _HomeState extends State<Home> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('QR Studio')),
+      appBar: AppBar(title: const Text('QR Master')),
       body: SafeArea(
         child: IndexedStack(
           index: _i,
@@ -260,7 +259,7 @@ class _CreatePageState extends State<CreatePage> {
         'bytes': png,
         'name': 'qr_${DateTime.now().millisecondsSinceEpoch}.png',
       });
-      if (mounted) toast(context, 'Saved to Pictures/QR Studio.');
+      if (mounted) toast(context, 'Saved to Pictures/QR Master.');
     } on PlatformException catch (e) {
       if (mounted) toast(context, e.message ?? 'Couldn’t save the image.');
     }
