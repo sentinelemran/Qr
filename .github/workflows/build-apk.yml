@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,18 +25,141 @@ jobs:
           channel: stable
           cache: true
 
-      # Generates the android/ folder so you only keep pubspec.yaml and lib/main.dart in the repo
+      # Generates the android/ folder so the repo only needs pubspec.yaml and lib/main.dart
       - name: Generate Android project
-        run: flutter create --platforms=android --org com.qrstudio --project-name qr_studio .
+        run: flutter create --platforms=android --org com.shadow --project-name qr_master .
 
       - name: Patch permissions, name, SDK and Kotlin
         run: |
           M=android/app/src/main/AndroidManifest.xml
           sed -i 's#<application#<uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>\n    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>\n    <application#' $M
-          sed -i 's#android:label="[^"]*"#android:label="QR Studio"#' $M
+          sed -i 's#android:label="[^"]*"#android:label="QR Master"#' $M
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' android/app/build.gradle
           sed -i 's/org.jetbrains.kotlin.android" version "[0-9.]*"/org.jetbrains.kotlin.android" version "1.9.24"/' android/settings.gradle
           cat $M
+
+      - name: Add gallery-save code to MainActivity
+        run: |
+          cat > android/app/src/main/kotlin/com/shadow/qr_master/MainActivity.kt <<'EOF'
+          package com.shadow.qr_master
+
+          import android.content.ContentValues
+          import android.os.Build
+          import android.os.Environment
+          import android.provider.MediaStore
+          import io.flutter.embedding.android.FlutterActivity
+          import io.flutter.embedding.engine.FlutterEngine
+          import io.flutter.plugin.common.MethodChannel
+
+          class MainActivity : FlutterActivity() {
+              override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+                  super.configureFlutterEngine(flutterEngine)
+                  MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "qr_master/gallery")
+                      .setMethodCallHandler { call, result ->
+                          if (call.method != "saveImage") {
+                              result.notImplemented()
+                              return@setMethodCallHandler
+                          }
+                          val bytes = call.argument<ByteArray>("bytes")
+                          val name = call.argument<String>("name") ?: "qr_code.png"
+                          if (bytes == null) {
+                              result.error("ARG", "No image data", null)
+                              return@setMethodCallHandler
+                          }
+                          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                              result.error("OLD", "Saving needs Android 10 or newer. Use Share instead.", null)
+                              return@setMethodCallHandler
+                          }
+                          try {
+                              val values = ContentValues().apply {
+                                  put(MediaStore.Images.Media.DISPLAY_NAME, name)
+                                  put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                                  put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/QR Master")
+                                  put(MediaStore.Images.Media.IS_PENDING, 1)
+                              }
+                              val resolver = contentResolver
+                              val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                              if (uri == null) {
+                                  result.error("IO", "Could not create the image file", null)
+                                  return@setMethodCallHandler
+                              }
+                              resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                              values.clear()
+                              values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                              resolver.update(uri, values, null, null)
+                              result.success(true)
+                          } catch (e: Exception) {
+                              result.error("IO", e.message, null)
+                          }
+                      }
+              }
+          }
+          EOF
+
+      - name: Generate app icon
+        run: |
+          python3 -m venv /tmp/iconenv
+          /tmp/iconenv/bin/pip install --quiet pillow
+          cat > /tmp/make_icon.py <<'PYEOF'
+          import os
+          from PIL import Image, ImageDraw
+
+          RES = os.environ.get('RES', 'android/app/src/main/res')
+          BLUE = (31, 75, 255, 255)
+          WHITE = (255, 255, 255, 255)
+          FINDERS = [(0, 0), (6, 0), (0, 6)]
+          EXTRA = [(6, 6), (7, 6), (9, 6), (8, 7), (10, 7), (6, 8), (7, 8), (9, 8), (10, 9), (6, 10), (8, 10), (9, 10)]
+
+          def render(legacy):
+              S = 1024
+              img = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+              d = ImageDraw.Draw(img)
+              if legacy:
+                  d.rounded_rectangle([0, 0, S - 1, S - 1], radius=int(S * 0.22), fill=BLUE)
+                  tile, box = 0.46, 0.72
+              else:
+                  tile, box = 0.36, 0.56
+              # scan brackets
+              b0 = int(S * (1 - box) / 2); b1 = S - b0
+              th = int(S * 0.04); arm = int(S * 0.15)
+              for (x, y, sx, sy) in [(b0, b0, 1, 1), (b1, b0, -1, 1), (b0, b1, 1, -1), (b1, b1, -1, -1)]:
+                  d.rectangle([min(x, x + sx * arm), min(y, y + sy * th), max(x, x + sx * arm), max(y, y + sy * th)], fill=WHITE)
+                  d.rectangle([min(x, x + sx * th), min(y, y + sy * arm), max(x, x + sx * th), max(y, y + sy * arm)], fill=WHITE)
+              # white tile with QR
+              side = int(S * tile); x0 = (S - side) // 2
+              d.rounded_rectangle([x0, x0, x0 + side, x0 + side], radius=int(side * 0.14), fill=WHITE)
+              pad = side * 0.11
+              qs = side - 2 * pad; m = qs / 11; qx = x0 + pad
+              def sq(c, r, w=1, h=1, col=BLUE):
+                  d.rectangle([qx + c * m, qx + r * m, qx + (c + w) * m - 1, qx + (r + h) * m - 1], fill=col)
+              for (c, r) in FINDERS:
+                  sq(c, r, 5, 5); sq(c + 1, r + 1, 3, 3, WHITE); sq(c + 2, r + 2, 1, 1)
+              for (c, r) in EXTRA:
+                  sq(c, r)
+              return img
+
+          def save(img, size, path):
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+              img.resize((size, size), Image.LANCZOS).save(path)
+
+          legacy = render(True)
+          for name, px in [('mdpi', 48), ('hdpi', 72), ('xhdpi', 96), ('xxhdpi', 144), ('xxxhdpi', 192)]:
+              save(legacy, px, f'{RES}/mipmap-{name}/ic_launcher.png')
+          save(render(False), 432, f'{RES}/drawable-xxxhdpi/ic_launcher_foreground.png')
+          os.makedirs(f'{RES}/mipmap-anydpi-v26', exist_ok=True)
+          open(f'{RES}/mipmap-anydpi-v26/ic_launcher.xml', 'w').write(
+              '<?xml version="1.0" encoding="utf-8"?>\n'
+              '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+              '    <background android:drawable="@color/ic_launcher_background"/>\n'
+              '    <foreground android:drawable="@drawable/ic_launcher_foreground"/>\n'
+              '</adaptive-icon>\n')
+          os.makedirs(f'{RES}/values', exist_ok=True)
+          open(f'{RES}/values/ic_launcher_background.xml', 'w').write(
+              '<?xml version="1.0" encoding="utf-8"?>\n'
+              '<resources>\n    <color name="ic_launcher_background">#1F4BFF</color>\n</resources>\n')
+          print('icons written')
+          PYEOF
+          /tmp/iconenv/bin/python /tmp/make_icon.py
 
       - run: flutter pub get
 
@@ -41,5 +167,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: qr-studio-apk
+          name: qr-master-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Publish APK to Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk QR-Master.apk
+          gh release create "v1.0.${{ github.run_number }}" QR-Master.apk --title "QR Master build ${{ github.run_number }}" --notes "Android APK. Download QR-Master.apk and install it."
